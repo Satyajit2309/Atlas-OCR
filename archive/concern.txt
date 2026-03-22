@@ -1,0 +1,213 @@
+Your plan involves **three main heavy models**, so the storage depends on which variants you use. Let’s estimate realistically.
+
+---
+
+# 📦 Approx Storage Requirements for Your Plan
+
+## 1️⃣ MiniCPM-V (via Ollama)
+
+```
+ollama pull minicpm-v
+```
+
+* Download: **~5 GB**
+* Disk after install: **~6–8 GB**
+
+This is the **multimodal LLM** that understands images + text.
+
+---
+
+## 2️⃣ Florence-2 Large (Microsoft)
+
+Model: **microsoft/Florence-2-large**
+
+Typical HuggingFace size:
+
+* Model weights: **~1.5 – 2 GB**
+* Transformers cache + tokenizer: **~200 MB**
+
+👉 **Total:** ~**2–2.3 GB**
+
+Purpose in your pipeline:
+
+* Object detection
+* Bounding boxes
+* Region grounding
+
+---
+
+## 3️⃣ PaddleOCR Models
+
+Typical PaddleOCR install downloads multiple models.
+
+Approx:
+
+| Component            | Size    |
+| -------------------- | ------- |
+| Detection model      | ~80 MB  |
+| Recognition model    | ~90 MB  |
+| Classification model | ~5 MB   |
+| Extra dependencies   | ~200 MB |
+
+👉 **Total:** ~**350–450 MB**
+
+---
+
+# 📊 Total Local Storage Estimate
+
+| Component        | Size      |
+| ---------------- | --------- |
+| MiniCPM-V        | ~6–8 GB   |
+| Florence-2 Large | ~2–2.3 GB |
+| PaddleOCR        | ~0.4 GB   |
+
+✅ **Total:**
+**~8.5 – 11 GB**
+
+Safe estimate: **~10 GB**
+
+---
+
+# 🧠 RAM / VRAM Needed
+
+For smooth execution:
+
+| Task                | RAM     |
+| ------------------- | ------- |
+| MiniCPM-V inference | 8–12 GB |
+| Florence-2          | 6–8 GB  |
+| PaddleOCR           | 2 GB    |
+
+👉 Recommended system RAM: **16 GB**
+
+---
+
+# ☁️ Can You Avoid Local Downloads?
+
+Yes — **there are 3 ways**.
+
+---
+
+# Option 1 — Google Colab (Best for your case)
+
+You can run everything **without storing models on your PC**.
+
+Models download temporarily into Colab runtime.
+
+Example:
+
+```python
+from transformers import AutoModelForCausalLM, AutoProcessor
+
+model = AutoModelForCausalLM.from_pretrained(
+    "microsoft/Florence-2-large",
+    trust_remote_code=True
+)
+```
+
+Storage happens in:
+
+```
+/root/.cache/huggingface
+```
+
+But when the session ends → **files disappear**.
+
+✅ Pros
+
+* No local storage
+* Free GPU (T4 sometimes)
+* Easy experimentation
+
+❌ Cons
+
+* Session timeout (12h)
+* Models re-download each session
+
+---
+
+# Option 2 — HuggingFace Inference API
+
+You **call models via API** instead of downloading.
+
+Example:
+
+```python
+from huggingface_hub import InferenceClient
+
+client = InferenceClient("microsoft/Florence-2-large")
+
+result = client.image_to_text(image)
+```
+
+✅ Pros
+
+* No GPU needed
+* No downloads
+
+❌ Cons
+
+* Rate limits
+* Paid for heavy usage
+
+---
+
+# Option 3 — Run MiniCPM-V on Ollama Cloud Alternatives
+
+Instead of Ollama local:
+
+* Replicate
+* Together AI
+* HuggingFace endpoints
+
+Example:
+
+```
+https://replicate.com
+```
+
+---
+
+# 🧠 Best Architecture for Your Project
+
+For **development phase**:
+
+```
+Google Colab
+    │
+    ├── Florence-2 (object detection)
+    │
+    ├── PaddleOCR (text extraction)
+    │
+    └── MiniCPM-V (semantic reasoning)
+            │
+            └── CSV row generation
+```
+
+Local storage required: **0 GB**
+
+---
+
+# 🚀 Pro Tip (Important for Your Pipeline)
+
+Your plan:
+
+```
+Florence-2 → bounding boxes
+PaddleOCR → text
+MiniCPM-V → reasoning
+```
+
+This is actually a **very strong architecture for technical drawings / engineering diagrams**.
+
+Many research pipelines do **exactly this multi-stage approach**.
+
+---
+
+# ⚡ If you want, I can also show you
+
+* **A full working pipeline script** (Florence-2 + PaddleOCR + MiniCPM-V)
+* How to **extract dimension tables from engineering drawings**
+* How to **auto-generate CSV rows from diagrams**
+
+It will save you **a LOT of debugging time**.

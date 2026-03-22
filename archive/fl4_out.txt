@@ -1,0 +1,1 @@
+{'<VQA>': 'VQA> Analyze this engineering drawing\nThese numbers<loc_625><loc_595><loc_815><loc_635>10"\n2.\n\n8"\n3.\n410"\n\nText labels found:\n- "SECTION A-A"\nFor EACH number above\n\n\n- - "feature": a short name like outer_diameter\n - "value":\n\n. Output ONLY valid JSON<loc_135><loc_303><loc_522><loc_599>'}

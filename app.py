@@ -1,50 +1,39 @@
 """
 Atlas-OCR: Local Engineering Drawing Dimension Extractor
 =========================================================
-Hybrid approach: EasyOCR + Tesseract OCR + OpenCV geometry detection + LLaVA vision model (Ollama).
-All processing is done locally — no API keys, no cloud services.
+Uses docTR (Document Text Recognition by Mindee) for high-accuracy OCR
+on engineering drawings, including rotated/vertical text and symbols.
 
 Pipeline:
-  1. PDF/Image → high-DPI rasterization (PyMuPDF)
-  2. Dual-engine OCR (EasyOCR + Tesseract) for comprehensive text extraction
-  3. OpenCV geometry detection (circles, lines, arrows)
-  4. LLaVA vision model for visual understanding + structured JSON output
-  5. Post-processing, deduplication, and export to XLSX/CSV
+  1. PDF → high-res (600 DPI) rasterisation via PyMuPDF
+  2. docTR ocr_predictor (DBNet + PARSeq) on GPU, tuned thresholds
+  3. Smart dimension parsing with regex (Ø, R, ±, °, CB, M, etc.)
+  4. Noise filtering + deduplication
+  5. Export to XLSX/CSV
 """
 
-from flask import Flask, render_template, request, jsonify, send_file
 import os
+os.environ["USE_TORCH"] = "1"
+
+from flask import Flask, render_template, request, jsonify, send_file
 import json
 import re
 import cv2
 import numpy as np
 import pandas as pd
+import fitz  # PyMuPDF
 import tempfile
 import logging
 from datetime import datetime
 from werkzeug.utils import secure_filename
 
-import fitz  # PyMuPDF
-import easyocr
-import pytesseract
-import ollama
+from doctr.io import DocumentFile
+from doctr.models import ocr_predictor
 
 # ──────────────────── CONFIG ────────────────────
 
-# Tesseract path (Windows default)
-TESSERACT_CMD = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-if os.path.exists(TESSERACT_CMD):
-    pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
-
-# Ollama vision model
-VISION_MODEL = "llava:latest"
-
-# Rendering DPI for PDF pages
-RENDER_DPI = 300
-
-# Max image dimension sent to LLaVA (to keep memory manageable)
-MAX_LLAVA_DIM = 1536
-
+RENDER_DPI = 600            # High DPI so thin dimension text is readable
+MIN_CONFIDENCE = 0.40       # Skip very low-confidence junk detections
 ALLOWED_EXTENSIONS = {'pdf', 'png', 'jpg', 'jpeg', 'bmp', 'tif', 'tiff'}
 
 # ──────────────────── LOGGING ────────────────────
@@ -59,17 +48,34 @@ app.config['MAX_CONTENT_LENGTH'] = 32 * 1024 * 1024  # 32 MB
 
 # ──────────────────── LAZY GLOBALS ────────────────────
 
-_easyocr_reader = None
+_doctr_model = None
 
 
-def get_easyocr_reader():
-    """Lazy-init EasyOCR reader (slow first load)."""
-    global _easyocr_reader
-    if _easyocr_reader is None:
-        log.info("Initializing EasyOCR reader (first request may be slow)...")
-        _easyocr_reader = easyocr.Reader(['en'], gpu=False)
-        log.info("EasyOCR reader ready.")
-    return _easyocr_reader
+def get_doctr_model():
+    """Lazy-init docTR OCR predictor with tuned detection thresholds."""
+    global _doctr_model
+    if _doctr_model is None:
+        log.info("Initializing docTR OCR predictor (first request may be slow)...")
+        _doctr_model = ocr_predictor(
+            det_arch='db_resnet50',
+            reco_arch='parseq',
+            pretrained=True,
+            assume_straight_pages=False,
+            straighten_pages=True,
+            export_as_straight_boxes=True,
+            detect_orientation=True,
+        )
+        # Lower detection thresholds — engineering drawings have small, thin text
+        _doctr_model.det_predictor.model.postprocessor.bin_thresh = 0.1
+        _doctr_model.det_predictor.model.postprocessor.box_thresh = 0.1
+
+        import torch
+        if torch.cuda.is_available():
+            _doctr_model = _doctr_model.cuda()
+            log.info(f"docTR loaded on GPU: {torch.cuda.get_device_name(0)}")
+        else:
+            log.info("docTR loaded on CPU")
+    return _doctr_model
 
 
 # ──────────────────── UTILITIES ────────────────────
@@ -78,12 +84,10 @@ def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
-def pdf_to_images(pdf_path, dpi=RENDER_DPI):
-    """Convert each page of a PDF to a high-res BGR numpy array."""
+def pdf_to_high_res_images(pdf_path, dpi=RENDER_DPI):
+    """Convert each PDF page to a high-res PNG for OCR."""
     doc = fitz.open(pdf_path)
-    images = []
     img_paths = []
-
     for i, page in enumerate(doc):
         pix = page.get_pixmap(dpi=dpi)
         img_np = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
@@ -91,449 +95,307 @@ def pdf_to_images(pdf_path, dpi=RENDER_DPI):
             img_bgr = cv2.cvtColor(img_np, cv2.COLOR_RGBA2BGR)
         else:
             img_bgr = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
-
-        # Save to disk for LLaVA
         img_path = pdf_path + f"_page_{i}.png"
         cv2.imwrite(img_path, img_bgr)
-        images.append(img_bgr)
         img_paths.append(img_path)
-
+        log.info(f"  Page {i+1}: {img_bgr.shape[1]}x{img_bgr.shape[0]} px")
     doc.close()
-    return images, img_paths
+    return img_paths
 
 
-def resize_for_llava(img_path, max_dim=MAX_LLAVA_DIM):
-    """Resize image if too large, return path to resized image."""
-    img = cv2.imread(img_path)
-    if img is None:
-        return img_path
-    h, w = img.shape[:2]
-    if max(h, w) <= max_dim:
-        return img_path
-    scale = max_dim / max(h, w)
-    new_w, new_h = int(w * scale), int(h * scale)
-    resized = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
-    resized_path = img_path.replace(".png", "_resized.png")
-    cv2.imwrite(resized_path, resized)
-    return resized_path
+# ──────────────────── DIMENSION PARSING ────────────────────
+
+# Words that are labels/annotations, NOT dimensions
+NOISE_WORDS = {
+    'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'N', 'O',
+    'P', 'Q', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z',
+    '-', '+', '|', '/', '\\', '=', ':', ';', '(', ')', '[', ']',
+    'a', 'b', 'c', 'd', 'e', 'o', 'l', 't',
+    'VIEW', 'ISOMETRIC', 'SECTION', 'DETAIL', 'SCALE', 'FRONT',
+    'TOP', 'SIDE', 'BOTTOM', 'RIGHT', 'LEFT', 'MATERIAL', 'DATE',
+    'DRAWN', 'CHECKED', 'APPROVED', 'TITLE', 'SHEET', 'REV',
+    'PROJECTION', 'TOLERANCES', 'FINISH', 'UNLESS', 'OTHERWISE',
+    'SPECIFIED', 'DIMENSIONS', 'ARE', 'IN', 'MM', 'DO', 'NOT',
+    'PART', 'NAME', 'QTY', 'DWG', 'NO', 'THE', 'ALL',
+    'D.', 'A.', 'B.', 'N.',
+}
 
 
-# ──────────────────── OCR PIPELINE ────────────────────
-
-def run_easyocr(img_bgr, page_no):
-    """Run EasyOCR on the image (single pass for speed)."""
-    reader = get_easyocr_reader()
-    results = []
-
-    try:
-        ocr_results = reader.readtext(img_bgr)
-        for bbox, text, confidence in ocr_results:
-            text = text.strip()
-            if not text:
-                continue
-            x_coords = [pt[0] for pt in bbox]
-            y_coords = [pt[1] for pt in bbox]
-            cx = int(sum(x_coords) / len(x_coords))
-            cy = int(sum(y_coords) / len(y_coords))
-
-            results.append({
-                'text': text,
-                'confidence': float(confidence),
-                'cx': cx,
-                'cy': cy,
-                'source': 'easyocr',
-                'page': page_no
-            })
-    except Exception as e:
-        log.warning(f"EasyOCR failed on page {page_no}: {e}")
-
-    return results
-
-
-def run_tesseract(img_bgr, page_no):
-    """Run Tesseract OCR on the image."""
-    results = []
-    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-    _, binary = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY)
-
-    try:
-        data = pytesseract.image_to_data(binary, config="--psm 6", output_type=pytesseract.Output.DICT)
-        for i in range(len(data['text'])):
-            text = data['text'][i].strip()
-            conf = int(data['conf'][i])
-            if not text or conf < 30:
-                continue
-
-            x = data['left'][i]
-            y = data['top'][i]
-            w = data['width'][i]
-            h = data['height'][i]
-
-            results.append({
-                'text': text,
-                'confidence': conf / 100.0,
-                'cx': x + w // 2,
-                'cy': y + h // 2,
-                'source': 'tesseract',
-                'page': page_no
-            })
-    except Exception as e:
-        log.warning(f"Tesseract failed on page {page_no}: {e}")
-
-    return results
-
-
-def merge_ocr_results(easyocr_results, tesseract_results):
-    """Merge and deduplicate results from both OCR engines."""
-    all_results = easyocr_results + tesseract_results
-    if not all_results:
-        return []
-
-    all_results.sort(key=lambda x: x['confidence'], reverse=True)
-
-    merged = []
-    used_positions = []
-
-    for r in all_results:
-        is_duplicate = False
-        for existing in used_positions:
-            if (abs(r['cx'] - existing['cx']) < 30 and
-                abs(r['cy'] - existing['cy']) < 30 and
-                r['text'] == existing['text']):
-                is_duplicate = True
-                break
-        if not is_duplicate:
-            merged.append(r)
-            used_positions.append(r)
-
-    return merged
-
-
-# ──────────────────── GEOMETRY DETECTION ────────────────────
-
-def detect_geometry(img_bgr):
-    """Detect circles and dimension lines/arrows in the drawing."""
-    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-
-    circles_raw = cv2.HoughCircles(
-        gray, cv2.HOUGH_GRADIENT, dp=1.2, minDist=40,
-        param1=120, param2=30, minRadius=10, maxRadius=400
-    )
-    circles = []
-    if circles_raw is not None:
-        for c in np.uint16(np.around(circles_raw[0])):
-            circles.append({'x': int(c[0]), 'y': int(c[1]), 'r': int(c[2])})
-
-    edges = cv2.Canny(gray, 50, 150)
-    lines_raw = cv2.HoughLinesP(edges, 1, np.pi / 180, 80, minLineLength=30, maxLineGap=10)
-    arrows = []
-    if lines_raw is not None:
-        for l in lines_raw:
-            x1, y1, x2, y2 = l[0]
-            length = np.hypot(x2 - x1, y2 - y1)
-            if length > 40:
-                arrows.append({'x1': int(x1), 'y1': int(y1), 'x2': int(x2), 'y2': int(y2)})
-
-    return circles, arrows
-
-
-# ──────────────────── OCR TEXT CLEANING ────────────────────
-
-def clean_ocr_text(text):
-    """Clean common OCR artifacts in dimension text."""
-    # Remove spaces within numbers: '41 0' -> '410', '1 0' -> '10'
-    cleaned = re.sub(r'(\d)\s+(\d)', r'\1\2', text)
-    # Normalize diameter symbols
-    cleaned = cleaned.replace('⌀', 'Ø').replace('ø', 'Ø')
-    return cleaned.strip()
-
-
-# ──────────────────── OCR CONTEXT BUILDER ────────────────────
-
-def build_ocr_context(ocr_results):
-    """Build a compact textual summary of OCR results for the LLM prompt."""
-    dim_pattern = re.compile(r'(\d+\.?\d*)', re.IGNORECASE)
-    dimension_texts = []
-    label_texts = []
-
-    for r in ocr_results:
-        # Clean the text
-        r_copy = dict(r)
-        r_copy['text'] = clean_ocr_text(r_copy['text'])
-        if dim_pattern.search(r_copy['text']):
-            dimension_texts.append(r_copy)
-        else:
-            label_texts.append(r_copy)
-
-    return dimension_texts, label_texts
-
-
-# ──────────────────── LLAVA VISION CALL ────────────────────
-
-def call_llava_with_context(image_paths, ocr_results, retry_count=3):
+def normalize_ocr_text(text):
     """
-    Call LLaVA vision model with OCR-detected numbers as primary data.
-    LLaVA's job is to CLASSIFY and LABEL the numbers, not discover new ones.
+    Normalize docTR OCR output to fix common misreadings of engineering symbols.
+    docTR reads: Ø → '$' or leading '0', ↓ → 'OL' or 'l'
     """
+    text = text.strip()
+    if not text:
+        return text
 
-    dimension_texts, label_texts = ocr_results
+    # docTR reads Ø as $ — replace $ followed by a number with Ø
+    text = re.sub(r'\$\s*(\d)', r'Ø\1', text)
+    # Standard normalization
+    text = text.replace('⌀', 'Ø').replace('ø', 'Ø').replace('Φ', 'Ø').replace('φ', 'Ø')
 
-    # Build the list of OCR-detected numbers for LLaVA to classify
-    ocr_numbers = []
-    for i, r in enumerate(dimension_texts, start=1):
-        ocr_numbers.append(f"  {i}. \"{r['text']}\"")
+    # docTR reads Ø as leading 0 before multi-digit numbers
+    # e.g. "0133" → "Ø133" → we extract 133 as value
+    # "030" → "Ø30", "06.5" → "Ø6.5"
+    # Only apply when the number after the leading 0 is 2+ digits (to avoid "0" → "Ø")
+    text = re.sub(r'^0(\d{2,}\.?\d*)$', r'Ø\1', text)
 
-    ocr_labels = []
-    for r in label_texts[:15]:
-        ocr_labels.append(f"  - \"{r['text']}\"")
+    # Remove stray spaces within numbers: "41 0" → "410"
+    text = re.sub(r'(\d)\s+(\d)', r'\1\2', text)
 
-    numbers_list = "\n".join(ocr_numbers) if ocr_numbers else "  (none detected)"
-    labels_list = "\n".join(ocr_labels) if ocr_labels else "  (none detected)"
-
-    prompt = f"""Analyze this engineering drawing. I need you to identify what each detected number/dimension represents.
-
-These numbers were found by OCR in the drawing:
-{numbers_list}
-
-Text labels found:
-{labels_list}
-
-For EACH number above, tell me:
-- "feature": a short name like outer_diameter, total_length, slot_width, bore_depth, fillet_radius etc.
-- "value": copy the exact number from the OCR list
-- "unit": write mm
-- "type": one word from: linear, diameter, radius, angle, depth, width, height, chamfer, thread
-- "notes": which part or view it belongs to
-
-Rules:
-- Include ALL the OCR numbers listed above, do not skip any
-- Use the EXACT numbers from the OCR list as values
-- Give each dimension a descriptive feature name based on what you see in the drawing
-- Do NOT add any numbers that are not in the OCR list
-
-Output ONLY valid JSON with this structure, nothing else:
-{{"columns":["id","feature","value","unit","type","notes"],"data":[...]}}"""
-
-    resized_paths = [resize_for_llava(p) for p in image_paths]
-
-    last_raw = None
-    for attempt in range(retry_count):
-        try:
-            log.info(f"  LLaVA attempt {attempt + 1}/{retry_count}...")
-            response = ollama.chat(
-                model=VISION_MODEL,
-                messages=[{
-                    "role": "user",
-                    "content": prompt,
-                    "images": resized_paths
-                }]
-            )
-
-            raw = response["message"]["content"].strip()
-            last_raw = raw
-            log.info(f"  LLaVA response length: {len(raw)} chars")
-            log.info(f"  LLaVA raw: {raw[:500]}")
-
-            parsed = extract_json_from_response(raw)
-            if parsed is not None and 'data' in parsed and len(parsed['data']) > 0:
-                return parsed, raw
-
-            log.warning(f"  Attempt {attempt + 1}: JSON parse failed or empty data")
-
-        except Exception as e:
-            log.error(f"  LLaVA attempt {attempt + 1} error: {e}")
-            last_raw = str(e)
-
-    return None, last_raw
+    return text
 
 
-def extract_json_from_response(text):
-    """Extract and parse JSON from LLM response."""
-    # Remove markdown code blocks
-    if '```' in text:
-        parts = text.split('```')
-        for part in parts:
-            cleaned = part.strip()
-            if cleaned.startswith('json'):
-                cleaned = cleaned[4:].strip()
-            if cleaned.startswith('{'):
-                try:
-                    return json.loads(cleaned)
-                except json.JSONDecodeError:
-                    pass
+def classify_dimension(text):
+    """Classify a single OCR text into an engineering dimension."""
+    text = normalize_ocr_text(text)
+    if not text:
+        return None
 
-    # Direct parse
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
+    # ── Diameter ──
+    m = re.match(r'[ØÖ]\s*(\d+\.?\d*)', text)
+    if m:
+        return m.group(1), 'mm', 'diameter', f'diameter_{m.group(1)}'
 
-    # Regex extraction
-    match = re.search(r'\{[\s\S]*\}', text)
-    if match:
-        try:
-            return json.loads(match.group(0))
-        except json.JSONDecodeError:
-            pass
+    # ── Radius (but not words like "REV") ──
+    m = re.match(r'R(\d+\.?\d*)$', text)
+    if m:
+        return m.group(1), 'mm', 'radius', f'radius_{m.group(1)}'
+
+    # ── Thread (M8, M10x1.5) ──
+    m = re.match(r'M(\d+\.?\d*)\s*[xX×]\s*(\d+\.?\d*)', text)
+    if m:
+        val = f'{m.group(1)}x{m.group(2)}'
+        return val, 'mm', 'thread', f'thread_M{val}'
+    m = re.match(r'M(\d+\.?\d*)$', text)
+    if m:
+        return m.group(1), 'mm', 'thread', f'thread_M{m.group(1)}'
+
+    # ── Angle (45°) ──
+    m = re.match(r'(\d+\.?\d*)\s*[°˚]', text)
+    if m:
+        return m.group(1), 'deg', 'angle', f'angle_{m.group(1)}'
+
+    # ── Chamfer (2x45°) ──
+    m = re.match(r'(\d+\.?\d*)\s*[xX×]\s*(\d+\.?\d*)\s*[°˚]?', text)
+    if m:
+        val = f'{m.group(1)}x{m.group(2)}'
+        return val, 'mm/deg', 'chamfer', f'chamfer_{val}'
+
+    # ── Tolerance (25±0.1) ──
+    m = re.match(r'(\d+\.?\d*)\s*[±]\s*(\d+\.?\d*)', text)
+    if m:
+        return f'{m.group(1)}±{m.group(2)}', 'mm', 'tolerance', f'dim_{m.group(1)}_tol'
+
+    # ── Plain number (2+ digits or decimal) ──
+    m = re.match(r'^(\d{2,}\.?\d*)$', text.strip())
+    if m:
+        return m.group(1), 'mm', 'linear', f'dim_{m.group(1)}'
+
+    # ── Single digit only if >= 1 (skip 0 noise) ──
+    m = re.match(r'^(\d)$', text.strip())
+    if m and m.group(1) != '0':
+        return m.group(1), 'mm', 'linear', f'dim_{m.group(1)}'
 
     return None
 
 
-# ──────────────────── OCR-ONLY FALLBACK ────────────────────
+def parse_compound_text(text):
+    """Parse compound dimension annotations from docTR line text."""
+    results = []
+    text = text.strip()
+    if not text:
+        return results
 
-def ocr_only_extraction(ocr_results, circles, arrows, page_no):
-    """Fallback: extract dimensions using only OCR + geometry (no LLM)."""
-    dims = []
-    idx = 1
-    used = set()
+    normalized = normalize_ocr_text(text)
 
-    for w in ocr_results:
-        text = w['text'].replace('⌀', '').replace('Ø', '').replace('ø', '').strip()
-        if not any(ch.isdigit() for ch in text):
-            continue
+    # ── "N HOLES – ØX" ──
+    m = re.match(r'(\d+)\s*HOLES?\s*[-–—]?\s*[ØÖ]?\s*(\d+\.?\d*)', normalized, re.IGNORECASE)
+    if m:
+        results.append((m.group(1), 'count', 'hole_count', f'holes_{m.group(1)}'))
+        results.append((m.group(2), 'mm', 'hole_diameter', f'hole_diameter_{m.group(2)}'))
+        return results
 
-        num_match = re.search(r'(\d+\.?\d*)', text)
-        if not num_match:
-            continue
+    # ── "CB Ø X ↓ Y" ──
+    m = re.match(r'C\.?B\.?\s*[ØÖ$]?\s*(?:OL|OI|l)?\s*(\d+\.?\d*)\s*(?:[↓⬇]|OL|OI|l)?\s*(\d+\.?\d*)?',
+                 normalized, re.IGNORECASE)
+    if m:
+        results.append((m.group(1), 'mm', 'counterbore_dia', f'counterbore_dia_{m.group(1)}'))
+        if m.group(2):
+            results.append((m.group(2), 'mm', 'counterbore_depth', f'counterbore_depth_{m.group(2)}'))
+        return results
 
-        value = num_match.group(1)
-        dim_type = 'linear'
+    # ── "ØX ↓ Y" ──
+    m = re.match(r'[ØÖ]\s*(\d+\.?\d*)\s*[↓⬇]\s*(\d+\.?\d*)', normalized)
+    if m:
+        results.append((m.group(1), 'mm', 'diameter', f'diameter_{m.group(1)}'))
+        results.append((m.group(2), 'mm', 'depth', f'depth_{m.group(2)}'))
+        return results
 
-        # Check proximity to circles → diameter
-        for c in circles:
-            dist = np.hypot(float(w['cx']) - c['x'], float(w['cy']) - c['y'])
-            if dist < c['r'] * 1.8:
-                dim_type = 'diameter'
-                break
+    # ── "CSK ØX" ──
+    m = re.match(r'C\.?S\.?K\.?\s*[ØÖ]?\s*(\d+\.?\d*)\s*[°˚]?', normalized, re.IGNORECASE)
+    if m:
+        results.append((m.group(1), 'deg', 'countersink', f'countersink_{m.group(1)}'))
+        return results
 
-        # Radius
-        if text.upper().startswith('R'):
-            dim_type = 'radius'
+    # ── "6 HOLES" alone ──
+    m = re.match(r'(\d+)\s*HOLES?', normalized, re.IGNORECASE)
+    if m:
+        results.append((m.group(1), 'count', 'hole_count', f'holes_{m.group(1)}'))
+        return results
 
-        # Angle
-        if '°' in text or 'deg' in text.lower():
-            dim_type = 'angle'
+    # ── "↓5" or "DEPTH 10" ──
+    m = re.match(r'[↓⬇]\s*(\d+\.?\d*)', normalized)
+    if m:
+        results.append((m.group(1), 'mm', 'depth', f'depth_{m.group(1)}'))
+        return results
+    m = re.match(r'DEPTH\s*(\d+\.?\d*)', normalized, re.IGNORECASE)
+    if m:
+        results.append((m.group(1), 'mm', 'depth', f'depth_{m.group(1)}'))
+        return results
 
-        key = (page_no, value, dim_type)
-        if key in used:
-            continue
-        used.add(key)
+    # Fallback: single classification
+    single = classify_dimension(normalized)
+    if single:
+        results.append(single)
 
-        dims.append({
-            'id': str(idx),
-            'feature': f'{dim_type}_{idx}',
-            'value': value,
-            'unit': 'mm',
-            'type': dim_type,
-            'notes': f'page {page_no}, OCR ({w["source"]})'
-        })
-        idx += 1
-
-    columns = ['id', 'feature', 'value', 'unit', 'type', 'notes']
-    return {'columns': columns, 'data': dims}
+    return results
 
 
 # ──────────────────── MAIN PROCESSING ────────────────────
 
 def process_drawing(filepath, filename):
-    """Main processing pipeline."""
-    temp_dir = tempfile.gettempdir()
+    """Main processing pipeline using docTR."""
     cleanup_paths = []
-
     try:
-        # ─── Step 1: Convert to images ───
-        log.info("Step 1: Converting to images...")
-        if filename.lower().endswith('.pdf'):
-            images, img_paths = pdf_to_images(filepath)
+        # ─── Step 1: Convert to high-res images ───
+        log.info("Step 1: Converting to high-resolution images...")
+        ext = filename.lower().rsplit('.', 1)[-1]
+
+        if ext == 'pdf':
+            img_paths = pdf_to_high_res_images(filepath, dpi=RENDER_DPI)
             cleanup_paths.extend(img_paths)
         else:
-            img = cv2.imread(filepath)
-            if img is None:
-                raise ValueError("Could not read image file")
-            img_path = os.path.join(temp_dir, filename + "_processed.png")
-            cv2.imwrite(img_path, img)
-            images = [img]
-            img_paths = [img_path]
-            cleanup_paths.append(img_path)
+            img_paths = [filepath]
 
-        log.info(f"  {len(images)} page(s) to process")
+        log.info(f"  {len(img_paths)} page(s) to process")
 
-        all_data = []
-        standard_columns = ['id', 'feature', 'value', 'unit', 'type', 'notes']
+        # ─── Step 2: Run OCR on each page ───
+        log.info("Step 2: Running docTR OCR (GPU-accelerated)...")
+        model = get_doctr_model()
 
-        for page_idx, (img_bgr, img_path) in enumerate(zip(images, img_paths)):
+        all_words = []
+        for page_idx, img_path in enumerate(img_paths):
             page_no = page_idx + 1
-            log.info(f"Processing page {page_no}/{len(images)}...")
+            log.info(f"  OCR on page {page_no}...")
 
-            # ─── Step 2: OCR ───
-            log.info("  Running EasyOCR...")
-            easyocr_results = run_easyocr(img_bgr, page_no)
-            log.info(f"  EasyOCR: {len(easyocr_results)} text regions")
+            doc = DocumentFile.from_images(img_path)
+            result = model(doc)
+            json_output = result.export()
 
-            log.info("  Running Tesseract...")
-            tesseract_results = run_tesseract(img_bgr, page_no)
-            log.info(f"  Tesseract: {len(tesseract_results)} text regions")
+            page = json_output['pages'][0]
+            page_h = page['dimensions'][0]
+            page_w = page['dimensions'][1]
 
-            merged_ocr = merge_ocr_results(easyocr_results, tesseract_results)
-            log.info(f"  Merged: {len(merged_ocr)} unique text regions")
+            for block in page['blocks']:
+                for line in block['lines']:
+                    # Get each word individually (better than line-level for dims)
+                    for word in line['words']:
+                        conf = float(word['confidence'])
+                        obj_score = float(word.get('objectness_score', 0))
+                        val = word['value'].strip()
 
-            # ─── Step 3: Geometry detection ───
-            circles, arrows = detect_geometry(img_bgr)
-            log.info(f"  Geometry: {len(circles)} circles, {len(arrows)} lines/arrows")
+                        # Skip noise
+                        if conf < MIN_CONFIDENCE:
+                            continue
+                        if val in NOISE_WORDS:
+                            continue
+                        if not val:
+                            continue
 
-            # ─── Step 4: Build context ───
-            ocr_context = build_ocr_context(merged_ocr)
+                        wg = word['geometry']
+                        wx_min = wg[0][0] * page_w
+                        wy_min = wg[0][1] * page_h
+                        wx_max = wg[1][0] * page_w
+                        wy_max = wg[1][1] * page_h
 
-            # ─── Step 5: LLaVA analysis ───
-            log.info("  Calling LLaVA vision model...")
-            llava_data, llava_raw = call_llava_with_context([img_path], ocr_context)
+                        all_words.append({
+                            'text': val,
+                            'confidence': conf,
+                            'cx': (wx_min + wx_max) / 2,
+                            'cy': (wy_min + wy_max) / 2,
+                            'page': page_no,
+                            'bbox': [wx_min, wy_min, wx_max, wy_max],
+                        })
 
-            if llava_data and 'data' in llava_data and llava_data['data']:
-                log.info(f"  LLaVA extracted {len(llava_data['data'])} dimension rows")
-                # Normalize to standard columns where possible
-                for row in llava_data['data']:
-                    # Add page info to notes
-                    if 'notes' in row:
-                        if f'page {page_no}' not in str(row.get('notes', '')):
-                            row['notes'] = f"page {page_no}, {row['notes']}"
-                    else:
-                        row['notes'] = f"page {page_no}"
-                all_data.extend(llava_data['data'])
-                # Track columns from LLaVA
-                if 'columns' in llava_data:
-                    for col in llava_data['columns']:
-                        if col not in standard_columns:
-                            standard_columns.append(col)
-            else:
-                log.info("  Falling back to OCR-only extraction")
-                page_data = ocr_only_extraction(merged_ocr, circles, arrows, page_no)
-                if page_data and page_data['data']:
-                    all_data.extend(page_data['data'])
+                    # Also try the combined line text for compound expressions
+                    line_text = ' '.join([w['value'] for w in line['words']])
+                    line_conf = np.mean([w['confidence'] for w in line['words']]) if line['words'] else 0
+                    if line_conf >= MIN_CONFIDENCE and len(line['words']) > 1:
+                        geo = line['geometry']
+                        all_words.append({
+                            'text': line_text,
+                            'confidence': float(line_conf),
+                            'cx': (geo[0][0] + geo[1][0]) / 2 * page_w,
+                            'cy': (geo[0][1] + geo[1][1]) / 2 * page_h,
+                            'page': page_no,
+                            'bbox': [geo[0][0]*page_w, geo[0][1]*page_h,
+                                     geo[1][0]*page_w, geo[1][1]*page_h],
+                        })
 
-        # ─── Step 6: Build final result ───
+        log.info(f"  Found {len(all_words)} candidate text regions")
+
+        # Log all detected text for debugging
+        for w in all_words:
+            log.info(f"    [{w['confidence']:.2f}] p{w['page']}: \"{w['text']}\"")
+
+        # ─── Step 3: Parse dimensions ───
+        log.info("Step 3: Parsing dimensions...")
+        all_data = []
+        seen_values = set()
+        idx = 1
+
+        for w in all_words:
+            text = w['text'].strip()
+            if not text:
+                continue
+
+            parsed_dims = parse_compound_text(text)
+
+            for (value, unit, dim_type, feature) in parsed_dims:
+                # Deduplicate by (page, value, type)
+                key = (w['page'], value, dim_type)
+                if key in seen_values:
+                    continue
+                seen_values.add(key)
+
+                all_data.append({
+                    'id': str(idx),
+                    'feature': feature,
+                    'value': value,
+                    'unit': unit,
+                    'type': dim_type,
+                    'confidence': f"{w['confidence']:.2f}",
+                    'notes': f"page {w['page']}",
+                })
+                idx += 1
+
+        log.info(f"  Parsed {len(all_data)} dimension entries")
+
+        # ─── Step 4: Build result ───
         if not all_data:
             return None, "No dimensions could be extracted from the drawing.", None, None
 
-        # Re-index IDs
-        for i, row in enumerate(all_data, start=1):
-            row['id'] = str(i)
+        standard_columns = ['id', 'feature', 'value', 'unit', 'type', 'confidence', 'notes']
 
-        # Determine final columns
-        all_keys = set()
-        for row in all_data:
-            all_keys.update(row.keys())
-
-        # Order: standard columns first, then any extra
-        final_columns = [c for c in standard_columns if c in all_keys]
-        extra_cols = sorted([c for c in all_keys if c not in final_columns])
-        final_columns.extend(extra_cols)
-
-        result = {
-            'columns': final_columns,
+        result_data = {
+            'columns': standard_columns,
             'data': all_data
         }
 
-        # ─── Step 7: Export ───
+        # ─── Step 5: Export ───
+        temp_dir = tempfile.gettempdir()
         ts = datetime.now().strftime('%Y%m%d_%H%M%S')
         excel_name = f'dimensions_{ts}.xlsx'
         csv_name = f'dimensions_{ts}.csv'
@@ -541,7 +403,7 @@ def process_drawing(filepath, filename):
         csv_path = os.path.join(temp_dir, csv_name)
 
         df = pd.DataFrame(all_data)
-        existing_cols = [c for c in final_columns if c in df.columns]
+        existing_cols = [c for c in standard_columns if c in df.columns]
         df = df[existing_cols]
 
         df.to_excel(excel_path, index=False, engine='openpyxl')
@@ -549,16 +411,17 @@ def process_drawing(filepath, filename):
 
         log.info(f"Exported {len(all_data)} rows to {excel_name}")
 
-        return result, None, excel_name, csv_name
+        return result_data, None, excel_name, csv_name
+
+    except Exception as e:
+        log.exception("Error in process_drawing")
+        return None, str(e), None, None
 
     finally:
         for p in cleanup_paths:
             try:
                 if os.path.exists(p):
                     os.remove(p)
-                resized = p.replace(".png", "_resized.png")
-                if os.path.exists(resized):
-                    os.remove(resized)
             except:
                 pass
 
@@ -630,10 +493,10 @@ def download(filename):
 if __name__ == '__main__':
     log.info("=" * 60)
     log.info("    Atlas-OCR: Local Dimension Extractor")
+    log.info("    Powered by docTR (Mindee)")
     log.info("=" * 60)
-    log.info(f"  Tesseract : {pytesseract.pytesseract.tesseract_cmd}")
-    log.info(f"  Vision LLM: {VISION_MODEL}")
-    log.info(f"  Render DPI: {RENDER_DPI}")
-    log.info(f"  LLaVA Max : {MAX_LLAVA_DIM}px")
+    log.info(f"  OCR Engine : docTR (DBNet + PARSeq)")
+    log.info(f"  Render DPI : {RENDER_DPI}")
+    log.info(f"  Min Conf   : {MIN_CONFIDENCE}")
     log.info("=" * 60)
     app.run(debug=True, port=5000, use_reloader=False)

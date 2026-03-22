@@ -1,0 +1,382 @@
+{
+  "columns": [
+    "id",
+    "feature",
+    "value",
+    "unit",
+    "type",
+    "confidence",
+    "notes"
+  ],
+  "data": [
+    {
+      "id": "1",
+      "feature": "dim_120",
+      "value": "120",
+      "unit": "mm",
+      "type": "linear",
+      "confidence": "1.00",
+      "notes": "page 1"
+    },
+    {
+      "id": "2",
+      "feature": "dim_100",
+      "value": "100",
+      "unit": "mm",
+      "type": "linear",
+      "confidence": "1.00",
+      "notes": "page 1"
+    },
+    {
+      "id": "3",
+      "feature": "dim_70",
+      "value": "70",
+      "unit": "mm",
+      "type": "linear",
+      "confidence": "1.00",
+      "notes": "page 2"
+    },
+    {
+      "id": "4",
+      "feature": "dim_110",
+      "value": "110",
+      "unit": "mm",
+      "type": "linear",
+      "confidence": "1.00",
+      "notes": "page 2"
+    },
+    {
+      "id": "5",
+      "feature": "dim_100",
+      "value": "100",
+      "unit": "mm",
+      "type": "linear",
+      "confidence": "1.00",
+      "notes": "page 2"
+    },
+    {
+      "id": "6",
+      "feature": "dim_5",
+      "value": "5",
+      "unit": "mm",
+      "type": "linear",
+      "confidence": "1.00",
+      "notes": "page 3"
+    },
+    {
+      "id": "7",
+      "feature": "dim_20",
+      "value": "20",
+      "unit": "mm",
+      "type": "linear",
+      "confidence": "1.00",
+      "notes": "page 4"
+    },
+    {
+      "id": "8",
+      "feature": "dim_12",
+      "value": "12",
+      "unit": "mm",
+      "type": "linear",
+      "confidence": "1.00",
+      "notes": "page 4"
+    },
+    {
+      "id": "9",
+      "feature": "diameter_30",
+      "value": "30",
+      "unit": "mm",
+      "type": "diameter",
+      "confidence": "0.86",
+      "notes": "page 4"
+    },
+    {
+      "id": "10",
+      "feature": "holes_6",
+      "value": "6",
+      "unit": "count",
+      "type": "hole_count",
+      "confidence": "0.97",
+      "notes": "page 4"
+    },
+    {
+      "id": "11",
+      "feature": "hole_diameter_06.5",
+      "value": "06.5",
+      "unit": "mm",
+      "type": "hole_diameter",
+      "confidence": "0.97",
+      "notes": "page 4"
+    },
+    {
+      "id": "12",
+      "feature": "dim_6",
+      "value": "6",
+      "unit": "mm",
+      "type": "linear",
+      "confidence": "1.00",
+      "notes": "page 4"
+    },
+    {
+      "id": "13",
+      "feature": "diameter_6.5",
+      "value": "6.5",
+      "unit": "mm",
+      "type": "diameter",
+      "confidence": "0.89",
+      "notes": "page 4"
+    },
+    {
+      "id": "14",
+      "feature": "diameter_80",
+      "value": "80",
+      "unit": "mm",
+      "type": "diameter",
+      "confidence": "0.86",
+      "notes": "page 4"
+    },
+    {
+      "id": "15",
+      "feature": "counterbore_dia_15",
+      "value": "15",
+      "unit": "mm",
+      "type": "counterbore_dia",
+      "confidence": "0.98",
+      "notes": "page 4"
+    },
+    {
+      "id": "16",
+      "feature": "dim_1",
+      "value": "1",
+      "unit": "mm",
+      "type": "linear",
+      "confidence": "0.99",
+      "notes": "page 4"
+    },
+    {
+      "id": "17",
+      "feature": "dim_5",
+      "value": "5",
+      "unit": "mm",
+      "type": "linear",
+      "confidence": "1.00",
+      "notes": "page 4"
+    },
+    {
+      "id": "18",
+      "feature": "dim_4",
+      "value": "4",
+      "unit": "mm",
+      "type": "linear",
+      "confidence": "1.00",
+      "notes": "page 4"
+    },
+    {
+      "id": "19",
+      "feature": "dim_0",
+      "value": "0",
+      "unit": "mm",
+      "type": "linear",
+      "confidence": "1.00",
+      "notes": "page 5"
+    },
+    {
+      "id": "20",
+      "feature": "dim_5",
+      "value": "5",
+      "unit": "mm",
+      "type": "linear",
+      "confidence": "1.00",
+      "notes": "page 5"
+    },
+    {
+      "id": "21",
+      "feature": "dim_50",
+      "value": "50",
+      "unit": "mm",
+      "type": "linear",
+      "confidence": "1.00",
+      "notes": "page 5"
+    },
+    {
+      "id": "22",
+      "feature": "radius_1.5",
+      "value": "1.5",
+      "unit": "mm",
+      "type": "radius",
+      "confidence": "1.00",
+      "notes": "page 6"
+    },
+    {
+      "id": "23",
+      "feature": "thread_M8",
+      "value": "8",
+      "unit": "mm",
+      "type": "thread",
+      "confidence": "1.00",
+      "notes": "page 6"
+    },
+    {
+      "id": "24",
+      "feature": "dim_1",
+      "value": "1",
+      "unit": "mm",
+      "type": "linear",
+      "confidence": "1.00",
+      "notes": "page 6"
+    },
+    {
+      "id": "25",
+      "feature": "dim_2",
+      "value": "2",
+      "unit": "mm",
+      "type": "linear",
+      "confidence": "1.00",
+      "notes": "page 6"
+    },
+    {
+      "id": "26",
+      "feature": "dim_18",
+      "value": "18",
+      "unit": "mm",
+      "type": "linear",
+      "confidence": "1.00",
+      "notes": "page 6"
+    },
+    {
+      "id": "27",
+      "feature": "dim_20",
+      "value": "20",
+      "unit": "mm",
+      "type": "linear",
+      "confidence": "1.00",
+      "notes": "page 6"
+    },
+    {
+      "id": "28",
+      "feature": "dim_30",
+      "value": "30",
+      "unit": "mm",
+      "type": "linear",
+      "confidence": "1.00",
+      "notes": "page 7"
+    },
+    {
+      "id": "29",
+      "feature": "dim_8",
+      "value": "8",
+      "unit": "mm",
+      "type": "linear",
+      "confidence": "1.00",
+      "notes": "page 7"
+    },
+    {
+      "id": "30",
+      "feature": "dim_40",
+      "value": "40",
+      "unit": "mm",
+      "type": "linear",
+      "confidence": "1.00",
+      "notes": "page 7"
+    },
+    {
+      "id": "31",
+      "feature": "dim_50",
+      "value": "50",
+      "unit": "mm",
+      "type": "linear",
+      "confidence": "1.00",
+      "notes": "page 7"
+    },
+    {
+      "id": "32",
+      "feature": "diameter_9",
+      "value": "9",
+      "unit": "mm",
+      "type": "diameter",
+      "confidence": "1.00",
+      "notes": "page 7"
+    },
+    {
+      "id": "33",
+      "feature": "dim_100",
+      "value": "100",
+      "unit": "mm",
+      "type": "linear",
+      "confidence": "1.00",
+      "notes": "page 7"
+    },
+    {
+      "id": "34",
+      "feature": "dim_73",
+      "value": "73",
+      "unit": "mm",
+      "type": "linear",
+      "confidence": "1.00",
+      "notes": "page 8"
+    },
+    {
+      "id": "35",
+      "feature": "diameter_0",
+      "value": "0",
+      "unit": "mm",
+      "type": "diameter",
+      "confidence": "0.54",
+      "notes": "page 8"
+    },
+    {
+      "id": "36",
+      "feature": "dim_0",
+      "value": "0",
+      "unit": "mm",
+      "type": "linear",
+      "confidence": "0.51",
+      "notes": "page 8"
+    },
+    {
+      "id": "37",
+      "feature": "dim_4.",
+      "value": "4.",
+      "unit": "mm",
+      "type": "linear",
+      "confidence": "1.00",
+      "notes": "page 8"
+    },
+    {
+      "id": "38",
+      "feature": "dim_9",
+      "value": "9",
+      "unit": "mm",
+      "type": "linear",
+      "confidence": "1.00",
+      "notes": "page 8"
+    },
+    {
+      "id": "39",
+      "feature": "radius_20",
+      "value": "20",
+      "unit": "mm",
+      "type": "radius",
+      "confidence": "1.00",
+      "notes": "page 8"
+    },
+    {
+      "id": "40",
+      "feature": "dim_4",
+      "value": "4",
+      "unit": "mm",
+      "type": "linear",
+      "confidence": "1.00",
+      "notes": "page 8"
+    },
+    {
+      "id": "41",
+      "feature": "dim_8",
+      "value": "8",
+      "unit": "mm",
+      "type": "linear",
+      "confidence": "1.00",
+      "notes": "page 8"
+    }
+  ]
+}
