@@ -3,341 +3,377 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Engineering Drawing Dimension Extractor</title>
+    <title>Atlas-HITL | Precision Dimension Extraction</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
+        :root {
+            --primary: #6366f1;
+            --accent: #22d3ee;
+            --bg: #0f172a;
+            --surface: #1e293b;
+            --border: #334155;
+            --text: #f8fafc;
         }
-        
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            padding: 20px;
+            font-family: 'Inter', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
         }
-        
-        .container {
-            max-width: 900px;
-            margin: 0 auto;
+
+        header {
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
+            padding: 0.75rem 1.5rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            z-index: 1000;
+        }
+
+        .logo { font-family: 'Outfit'; font-weight: 700; font-size: 1.5rem; color: var(--accent); }
+
+        .toolbar {
+            display: flex;
+            gap: 0.75rem;
+            align-items: center;
+        }
+
+        .btn {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            color: white;
+            padding: 0.5rem 1rem;
+            border-radius: 0.4rem;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: 0.2s;
+        }
+        .btn:hover { background: #334155; border-color: var(--primary); }
+        .btn-primary { background: var(--primary); border: none; }
+        .btn-primary:active { transform: scale(0.95); }
+
+        #zoom-val { min-width: 50px; text-align: center; font-variant-numeric: tabular-nums; }
+
+        /* ──────────────────── LAYOUT ──────────────────── */
+        main { flex: 1; display: flex; overflow: hidden; }
+
+        #sidebar {
+            width: 180px;
+            background: var(--surface);
+            border-right: 1px solid var(--border);
+            overflow-y: auto;
+            padding: 1rem 0;
+        }
+
+        .page-item {
+            padding: 0.75rem 1.5rem;
+            cursor: pointer;
+            border-left: 3px solid transparent;
+            font-size: 0.85rem;
+            opacity: 0.7;
+        }
+        .page-item:hover { background: rgba(255,255,255,0.05); }
+        .page-item.active { border-color: var(--accent); background: rgba(34, 211, 238, 0.1); opacity: 1; font-weight: 600; }
+
+        /* ──── Workspace (Drawing Area) ──── */
+        #workspace {
+            flex: 1;
+            overflow: auto;
+            padding: 40px;
+            background: #111827;
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            position: relative;
+        }
+
+        #canvas-wrapper {
+            position: relative;
+            transform-origin: top left;
+            box-shadow: 0 0 50px rgba(0,0,0,0.5);
             background: white;
-            border-radius: 10px;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
-            padding: 40px;
         }
-        
-        h1 {
-            color: #333;
-            text-align: center;
-            margin-bottom: 10px;
-            font-size: 2em;
+
+        canvas { position: absolute; top: 0; left: 0; }
+        #pdf-canvas { z-index: 1; pointer-events: none; }
+        #overlay-canvas { z-index: 2; cursor: crosshair; }
+
+        /* ──── Right Panel (Results) ──── */
+        #panel-right {
+            width: 320px;
+            background: var(--surface);
+            border-left: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
         }
-        
-        .subtitle {
-            text-align: center;
-            color: #666;
-            margin-bottom: 30px;
-            font-size: 0.95em;
-        }
-        
-        .upload-section {
-            border: 2px dashed #667eea;
-            border-radius: 8px;
-            padding: 40px;
-            text-align: center;
-            margin-bottom: 30px;
-            background: #f8f9ff;
-            transition: all 0.3s;
-        }
-        
-        .upload-section:hover {
-            border-color: #764ba2;
-            background: #f0f2ff;
-        }
-        
-        .upload-icon {
-            font-size: 3em;
-            margin-bottom: 15px;
-            color: #667eea;
-        }
-        
-        input[type="file"] {
-            display: none;
-        }
-        
-        .file-label {
-            display: inline-block;
-            padding: 12px 30px;
-            background: #667eea;
-            color: white;
-            border-radius: 5px;
-            cursor: pointer;
-            font-size: 1em;
-            transition: background 0.3s;
-        }
-        
-        .file-label:hover {
-            background: #764ba2;
-        }
-        
-        .file-name {
-            margin-top: 15px;
-            color: #666;
-            font-size: 0.9em;
-        }
-        
-        .analyze-btn {
-            display: block;
-            width: 100%;
-            padding: 15px;
-            background: #667eea;
-            color: white;
-            border: none;
-            border-radius: 5px;
-            font-size: 1.1em;
-            cursor: pointer;
-            margin-top: 20px;
-            transition: background 0.3s;
-        }
-        
-        .analyze-btn:hover:not(:disabled) {
-            background: #764ba2;
-        }
-        
-        .analyze-btn:disabled {
-            background: #ccc;
-            cursor: not-allowed;
-        }
-        
-        .download-btn {
-            display: inline-block;
-            padding: 12px 30px;
-            background: #28a745;
-            color: white;
-            border: none;
-            border-radius: 5px;
-            font-size: 1em;
-            cursor: pointer;
-            text-decoration: none;
-            transition: background 0.3s;
-            margin-top: 15px;
-        }
-        
-        .download-btn:hover {
-            background: #218838;
-        }
-        
-        .loading {
-            text-align: center;
-            margin: 20px 0;
-            display: none;
-        }
-        
-        .spinner {
-            border: 3px solid #f3f3f3;
-            border-top: 3px solid #667eea;
-            border-radius: 50%;
-            width: 40px;
-            height: 40px;
-            animation: spin 1s linear infinite;
-            margin: 0 auto;
-        }
-        
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-        
-        .results {
-            display: none;
-            margin-top: 30px;
-            padding: 25px;
-            background: #f8f9ff;
-            border-radius: 8px;
-            border-left: 4px solid #667eea;
-        }
-        
-        .results h2 {
-            color: #333;
-            margin-bottom: 15px;
-            font-size: 1.5em;
-        }
-        
-        .results-content {
-            color: #444;
-            line-height: 1.6;
-            font-size: 0.95em;
-        }
-        
-        .preview-table {
-            width: 100%;
-            margin-top: 20px;
-            border-collapse: collapse;
-            overflow-x: auto;
-            display: block;
-        }
-        
-        .preview-table table {
-            width: 100%;
-            min-width: 600px;
-        }
-        
-        .preview-table th,
-        .preview-table td {
-            padding: 10px;
-            text-align: left;
-            border: 1px solid #ddd;
-        }
-        
-        .preview-table th {
-            background: #667eea;
-            color: white;
+        .panel-header {
+            padding: 1rem;
             font-weight: 600;
+            border-bottom: 1px solid var(--border);
+            font-family: 'Outfit';
         }
-        
-        .preview-table tr:nth-child(even) {
-            background: #f8f9ff;
+        #results { flex: 1; overflow-y: auto; padding: 1rem; }
+        .res-card {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            padding: 0.75rem;
+            border-radius: 0.5rem;
+            margin-bottom: 0.75rem;
+            font-size: 0.9rem;
         }
-        
-        .error {
-            background: #ffe6e6;
-            border-left-color: #ff4444;
+        .res-type { color: var(--accent); font-size: 0.7rem; font-weight: 800; text-transform: uppercase; margin-bottom: 4px;}
+        .res-val { color: white; font-weight: 600; font-size: 1.1rem; }
+
+        /* ──────────────────── MODAL ──────────────────── */
+        #upload-modal {
+            position: fixed; inset: 0; z-index: 2000;
+            background: rgba(15, 23, 42, 0.95);
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
         }
-        
-        .error h2 {
-            color: #cc0000;
+        .drop-zone {
+            width: 400px; padding: 40px; border: 2px dashed var(--border); border-radius: 1rem;
+            text-align: center; cursor: pointer; transition: 0.2s;
         }
-        
-        .download-section {
-            text-align: center;
-            margin-top: 20px;
-            padding-top: 20px;
-            border-top: 2px solid #e0e0e0;
-        }
+        .drop-zone:hover { border-color: var(--accent); background: rgba(34, 211, 238, 0.05); }
+
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>📐 Dimension Extractor</h1>
-        <p class="subtitle">Upload engineering drawings to extract dimensions using AI</p>
-        
-        <div class="upload-section">
-            <div class="upload-icon">📄</div>
-            <label for="file-input" class="file-label">Choose File</label>
-            <input type="file" id="file-input" accept=".pdf,.png,.jpg,.jpeg,.gif,.bmp">
-            <div class="file-name" id="file-name">No file chosen</div>
-        </div>
-        
-        <button class="analyze-btn" id="analyze-btn" disabled>Analyze Drawing</button>
-        
-        <div class="loading" id="loading">
-            <div class="spinner"></div>
-            <p style="margin-top: 15px; color: #666;">Analyzing document...</p>
-        </div>
-        
-        <div class="results" id="results">
-            <h2>Extracted Dimensions</h2>
-            <div class="results-content" id="results-content"></div>
-            
-            <div class="download-section" id="download-section" style="display: none;">
-                <a href="#" class="download-btn" id="download-btn">
-                    📥 Download Excel File
-                </a>
-            </div>
+
+<header>
+    <div class="logo">ATLAS-HITL</div>
+    <div class="toolbar">
+        <button class="btn" id="btn-zoom-out">−</button>
+        <span id="zoom-val">100%</span>
+        <button class="btn" id="btn-zoom-in">+</button>
+        <div style="width: 20px;"></div>
+        <button class="btn" id="btn-clear">Clear</button>
+        <button class="btn btn-primary" id="btn-analyze">Process Page</button>
+        <button class="btn" id="btn-export" style="border-color: #10b981; color: #10b981;">Export XLSX</button>
+    </div>
+</header>
+
+<main>
+    <div id="sidebar"></div>
+    <div id="workspace">
+        <div id="canvas-wrapper">
+            <canvas id="pdf-canvas"></canvas>
+            <canvas id="overlay-canvas"></canvas>
         </div>
     </div>
-    
-    <script>
-        const fileInput = document.getElementById('file-input');
-        const fileName = document.getElementById('file-name');
-        const analyzeBtn = document.getElementById('analyze-btn');
-        const loading = document.getElementById('loading');
-        const results = document.getElementById('results');
-        const resultsContent = document.getElementById('results-content');
-        const downloadSection = document.getElementById('download-section');
-        const downloadBtn = document.getElementById('download-btn');
-        
-        let currentExcelFile = null;
-        
-        fileInput.addEventListener('change', function(e) {
-            if (this.files.length > 0) {
-                fileName.textContent = this.files[0].name;
-                analyzeBtn.disabled = false;
-            } else {
-                fileName.textContent = 'No file chosen';
-                analyzeBtn.disabled = true;
-            }
+    <div id="panel-right">
+        <div class="panel-header">EXTRACTED DATA</div>
+        <div id="results"></div>
+    </div>
+</main>
+
+<div id="upload-modal">
+    <div class="drop-zone" id="drop-zone">
+        <h2 style="margin-bottom: 10px;">Select Engineering PDF</h2>
+        <p style="color: var(--accent);">Target specific dimensions with manual boxes</p>
+    </div>
+    <input type="file" id="file-input" hidden>
+</div>
+
+<script>
+    const state = {
+        pages: [],
+        currentIdx: -1,
+        zoom: 0.5, // Start at 50% to see whole page
+        isDrawing: false,
+        startX: 0, 
+        startY: 0,
+        boxes: [],
+        currentBox: null,
+        results: []
+    };
+
+    const wrapper = document.getElementById('canvas-wrapper');
+    const pCanvas = document.getElementById('pdf-canvas');
+    const oCanvas = document.getElementById('overlay-canvas');
+    const pCtx = pCanvas.getContext('2d');
+    const oCtx = oCanvas.getContext('2d');
+    const resultsContainer = document.getElementById('results');
+
+    // ──────────────────── ZOOM LOGIC ────────────────────
+
+    function updateZoom() {
+        wrapper.style.transform = `scale(${state.zoom})`;
+        document.getElementById('zoom-val').innerText = `${Math.round(state.zoom * 100)}%`;
+    }
+
+    document.getElementById('btn-zoom-in').onclick = () => { state.zoom += 0.1; updateZoom(); };
+    document.getElementById('btn-zoom-out').onclick = () => { state.zoom = Math.max(0.1, state.zoom - 0.1); updateZoom(); };
+
+    // ──────────────────── UPLOAD ────────────────────
+
+    const fileIn = document.getElementById('file-input');
+    document.getElementById('drop-zone').onclick = () => fileIn.click();
+    fileIn.onchange = ev => uploadFile(ev.target.files[0]);
+
+    async function uploadFile(file) {
+        if (!file) return;
+        const fd = new FormData();
+        fd.append('file', file);
+        document.getElementById('upload-modal').innerHTML = "<h1>Rendering Drawing...</h1>";
+        const resp = await fetch('/upload', { method: 'POST', body: fd });
+        const data = await resp.json();
+        state.pages = data.pages;
+        document.getElementById('upload-modal').style.display = 'none';
+        initPageList();
+        loadPage(0);
+    }
+
+    function initPageList() {
+        const side = document.getElementById('sidebar');
+        side.innerHTML = "";
+        state.pages.forEach((p, i) => {
+            const div = document.createElement('div');
+            div.className = 'page-item';
+            div.id = `pg-${i}`;
+            div.innerText = `Page ${i+1}`;
+            div.onclick = () => loadPage(i);
+            side.appendChild(div);
         });
+    }
+
+    function loadPage(idx) {
+        state.currentIdx = idx;
+        state.boxes = [];
+        document.querySelectorAll('.page-item').forEach(el => el.classList.remove('active'));
+        document.getElementById(`pg-${idx}`).classList.add('active');
+
+        const page = state.pages[idx];
+        const img = new Image();
+        img.src = `/get_page_image/${page.name}`;
+        img.onload = () => {
+            pCanvas.width = page.w; pCanvas.height = page.h;
+            oCanvas.width = page.w; oCanvas.height = page.h;
+            wrapper.style.width = page.w + 'px';
+            wrapper.style.height = page.h + 'px';
+            pCtx.drawImage(img, 0, 0);
+            drawAll();
+            // Auto-zoom to fit height if window is small
+            const fit = (window.innerHeight - 150) / page.h;
+            state.zoom = Math.min(1.0, fit);
+            updateZoom();
+        };
+    }
+
+    // ──────────────────── DRAWING CORE ────────────────────
+
+    oCanvas.onmousedown = e => {
+        state.isDrawing = true;
+        const {x, y} = getMousePos(e);
+        state.startX = x; state.startY = y;
+    };
+
+    window.onmousemove = e => {
+        if (!state.isDrawing) return;
+        const {x, y} = getMousePos(e);
+        state.currentBox = {
+            x: Math.min(state.startX, x),
+            y: Math.min(state.startY, y),
+            w: Math.abs(x - state.startX),
+            h: Math.abs(y - state.startY)
+        };
+        drawAll();
+    };
+
+    window.onmouseup = () => {
+        if (state.isDrawing && state.currentBox && state.currentBox.w > 4) {
+            state.boxes.push(state.currentBox);
+        }
+        state.isDrawing = false;
+        state.currentBox = null;
+        drawAll();
+    };
+
+    function getMousePos(e) {
+        const rect = oCanvas.getBoundingClientRect();
+        // Here we must account for CSS scale!
+        return {
+            x: (e.clientX - rect.left) / state.zoom,
+            y: (e.clientY - rect.top) / state.zoom
+        };
+    }
+
+    function drawAll() {
+        oCtx.clearRect(0, 0, oCanvas.width, oCanvas.height);
+        oCtx.lineWidth = 3;
+        oCtx.strokeStyle = "#4f46e5";
         
-        analyzeBtn.addEventListener('click', async function() {
-            const file = fileInput.files[0];
-            if (!file) return;
-            
-            const formData = new FormData();
-            formData.append('file', file);
-            
-            analyzeBtn.disabled = true;
-            loading.style.display = 'block';
-            results.style.display = 'none';
-            downloadSection.style.display = 'none';
-            
-            try {
-                const response = await fetch('/analyze', {
-                    method: 'POST',
-                    body: formData
-                });
-                
-                const data = await response.json();
-                
-                loading.style.display = 'none';
-                results.style.display = 'block';
-                
-                if (data.error) {
-                    results.classList.add('error');
-                    resultsContent.innerHTML = `<p>${data.error}</p>`;
-                } else {
-                    results.classList.remove('error');
-                    
-                    // Display preview table
-                    if (data.preview && data.preview.data) {
-                        let tableHTML = '<div class="preview-table"><table><thead><tr>';
-                        
-                        // Add headers
-                        data.preview.columns.forEach(col => {
-                            tableHTML += `<th>${col}</th>`;
-                        });
-                        tableHTML += '</tr></thead><tbody>';
-                        
-                        // Add data rows
-                        data.preview.data.forEach(row => {
-                            tableHTML += '<tr>';
-                            data.preview.columns.forEach(col => {
-                                tableHTML += `<td>${row[col] || 'N/A'}</td>`;
-                            });
-                            tableHTML += '</tr>';
-                        });
-                        
-                        tableHTML += '</tbody></table></div>';
-                        resultsContent.innerHTML = tableHTML;
-                    }
-                    
-                    // Set up download button
-                    if (data.excel_file) {
-                        currentExcelFile = data.excel_file;
-                        downloadBtn.href = `/download/${data.excel_file}`;
-                        downloadSection.style.display = 'block';
-                    }
-                }
-            } catch (error) {
-                loading.style.display = 'none';
-                results.style.display = 'block';
-                results.classList.add('error');
-                resultsContent.innerHTML = `<p>Error: ${error.message}</p>`;
-            }
-            
-            analyzeBtn.disabled = false;
+        state.boxes.forEach((b, i) => {
+            oCtx.strokeRect(b.x, b.y, b.w, b.h);
+            oCtx.fillStyle = "rgba(79, 70, 230, 0.2)";
+            oCtx.fillRect(b.x, b.y, b.w, b.h);
+            oCtx.fillStyle = "white";
+            oCtx.font = "bold 14px Inter";
+            oCtx.fillText(`#${i+1}`, b.x + 5, b.y + 18);
         });
-    </script>
+
+        if (state.currentBox) {
+            oCtx.strokeStyle = "#22d3ee";
+            oCtx.lineWidth = 2;
+            oCtx.strokeRect(state.currentBox.x, state.currentBox.y, state.currentBox.w, state.currentBox.h);
+        }
+    }
+
+    document.getElementById('btn-clear').onclick = () => { state.boxes = []; drawAll(); };
+
+    // ──────────────────── BACKEND ANALYZE ────────────────────
+
+    document.getElementById('btn-analyze').onclick = async () => {
+        if (!state.boxes.length) return alert("Please draw some boxes.");
+        const btn = document.getElementById('btn-analyze');
+        btn.innerText = "Analyzing..."; btn.disabled = true;
+        
+        try {
+            const resp = await fetch('/process_crop', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    filename: state.pages[state.currentIdx].name,
+                    page_idx: state.currentIdx,
+                    boxes: state.boxes
+                })
+            });
+            const data = await resp.json();
+            state.results.push(...data.results);
+            renderResults();
+            state.boxes = []; drawAll();
+        } catch (err) { alert(err); }
+        finally { btn.innerText = "Process Page"; btn.disabled = false; }
+    };
+
+    function renderResults() {
+        resultsContainer.innerHTML = "";
+        [...state.results].reverse().forEach(r => {
+            const div = document.createElement('div');
+            div.className = 'res-card';
+            div.innerHTML = `
+                <div class="res-type">PG ${r.page} | ${r.type}</div>
+                <div class="res-val">${r.value}</div>
+                <div style="font-size: 0.75rem; color: #64748b; margin-top: 5px;">"${r.raw_text}"</div>
+            `;
+            resultsContainer.appendChild(div);
+        });
+    }
+
+    document.getElementById('btn-export').onclick = () => { window.location.href='/export'; };
+
+    // Keyboard Undo
+    window.onkeydown = e => {
+        if (e.ctrlKey && e.key === 'z') { state.boxes.pop(); drawAll(); }
+    };
+
+</script>
+
 </body>
 </html>
